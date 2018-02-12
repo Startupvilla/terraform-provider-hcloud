@@ -1,0 +1,6 @@
+.idea
+.terraform
+*.tf
+*.tf*
+terraform-provider-hcloud
+*.log
