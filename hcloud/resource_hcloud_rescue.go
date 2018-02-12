@@ -22,6 +22,7 @@ func resourceHcloudRescue() *schema.Resource {
 			},
 			"type": &schema.Schema{
 				Type:     schema.TypeString,
+				Default:  "linux64",
 				Optional: true,
 				ForceNew: true,
 			},
@@ -85,17 +86,31 @@ func resourceHcloudRescueCreate(d *schema.ResourceData, m interface{}) error {
 	}
 
 	// transform ssh key ids into SSHKey array
-	ids := d.Get("ssh_keys").([]int)
+	ids := d.Get("ssh_keys").([]interface{})
 	ssh := make([]*hcloud.SSHKey, len(ids))
 	for i, v := range ids {
 		ssh[i] = &hcloud.SSHKey{
-			ID: v,
+			ID: v.(int),
 		}
 	}
 
+	// set rescue type
+	var rt hcloud.ServerRescueType
+	switch d.Get("type").(string) {
+		case "linux32":
+			rt = hcloud.ServerRescueTypeLinux32
+
+		case "freebsd64":
+			rt = hcloud.ServerRescueTypeFreeBSD64
+
+		default:
+			rt = hcloud.ServerRescueTypeLinux64
+	}
+
+
 	// enable rescue request
 	rescue, _, err := m.(*hcloud.Client).Server.EnableRescue(context.Background(), server, hcloud.ServerEnableRescueOpts{
-		Type: hcloud.ServerRescueType(d.Get("type").(string)),
+		Type: rt,
 		SSHKeys: ssh,
 	})
 	if err != nil {

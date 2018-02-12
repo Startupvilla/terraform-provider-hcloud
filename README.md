@@ -107,7 +107,7 @@ resource "hcloud_sshkey" "my-key" {
 ```
 resource "hcloud_rescue" "test" {
     server = "${hcloud_server.test.id}"                 // Int, required
-    type = "linux64"                                    // String, optional
+    type = "linux64"                                    // String, optional (Std: linux64)
     ssh_keys = [                                        // []Int, optional
         "${hcloud_sshkey.my-key.id}"
     ]
@@ -126,3 +126,19 @@ resource "hcloud_rescue" "test" {
  
  
 This resource will generate a uuid as id and will not check if the rescue system is still running. The main purpose of this resource is to boot the server into the rescue system and then provision it. If you want to reprovision the server, just taint the resource. Whene deleting this resource it will make sure to disable the rescue system for the next boot and depending on your settings reboot the server.
+
+#### Provision via Rescue and Password
+Adding a ssh connection within the rescue resource doesn't work, if you use password authentication. Therefore you have to introduce another null_resource
+```
+resource "null_resource" "install_test" {
+    connection {
+        type    = "ssh"
+        host    = "${hcloud_server.test.ipv4}"
+        user    = "root"
+        timeout = "60m"
+        password = "${hcloud_rescue.test.password}"
+    }
+    
+    ...
+}
+```
