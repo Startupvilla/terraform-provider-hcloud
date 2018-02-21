@@ -5,6 +5,8 @@ import (
 	"github.com/hetznercloud/hcloud-go/hcloud"
 	"context"
 	"github.com/satori/go.uuid"
+	"strconv"
+	"errors"
 )
 
 func resourceHcloudRescue() *schema.Resource {
@@ -69,34 +71,40 @@ func resourceHcloudRescueCreate(d *schema.ResourceData, m interface{}) error {
 		return err
 	}
 
-	// deactivate rescue first, if it's already enabled
-	if server.RescueEnabled {
-		// disable rescue request
-		act, _, err := m.(*hcloud.Client).Server.DisableRescue(context.Background(), server)
-		if err != nil {
-			return err
+	if server != nil {
+		// deactivate rescue first, if it's already enabled
+		if server.RescueEnabled {
+			// disable rescue request
+			act, _, err := m.(*hcloud.Client).Server.DisableRescue(context.Background(), server)
+			if err != nil {
+				return err
+			}
+
+			// wait for action and check for error
+			_, errch := m.(*hcloud.Client).Action.WatchProgress(context.Background(), act)
+			err = <-errch
+			if err != nil {
+				return err
+			}
 		}
 
-		// wait for action and check for error
-		_, errch := m.(*hcloud.Client).Action.WatchProgress(context.Background(), act)
-		err = <-errch
-		if err != nil {
-			return err
+		// transform ssh key ids into array of SSHKey objects
+		ids := d.Get("ssh_keys").([]interface{})
+		ssh := make([]*hcloud.SSHKey, len(ids))
+		for i, v := range ids {
+			key, _, err := m.(*hcloud.Client).SSHKey.GetByID(context.Background(), v.(int))
+			if err != nil {
+				return err
+			}
+			if key == nil {
+				return errors.New("SSH Key " + strconv.Itoa(v.(int)) + " not found")
+			}
+			ssh[i] = key
 		}
-	}
 
-	// transform ssh key ids into SSHKey array
-	ids := d.Get("ssh_keys").([]interface{})
-	ssh := make([]*hcloud.SSHKey, len(ids))
-	for i, v := range ids {
-		ssh[i] = &hcloud.SSHKey{
-			ID: v.(int),
-		}
-	}
-
-	// set rescue type
-	var rt hcloud.ServerRescueType
-	switch d.Get("type").(string) {
+		// set rescue type
+		var rt hcloud.ServerRescueType
+		switch d.Get("type").(string) {
 		case "linux32":
 			rt = hcloud.ServerRescueTypeLinux32
 
@@ -105,60 +113,62 @@ func resourceHcloudRescueCreate(d *schema.ResourceData, m interface{}) error {
 
 		default:
 			rt = hcloud.ServerRescueTypeLinux64
-	}
+		}
 
-
-	// enable rescue request
-	rescue, _, err := m.(*hcloud.Client).Server.EnableRescue(context.Background(), server, hcloud.ServerEnableRescueOpts{
-		Type: rt,
-		SSHKeys: ssh,
-	})
-	if err != nil {
-		return err
-	}
-
-	// wait for action and check for error
-	_, errch := m.(*hcloud.Client).Action.WatchProgress(context.Background(), rescue.Action)
-	err = <-errch
-	if err != nil {
-		return err
-	}
-
-	// save root password
-	d.Set("password", rescue.RootPassword)
-
-	if d.Get("reboot_on_activation").(bool) {	// soft reboot instead of reset, if reboot is set to true
-		act, _, err := m.(*hcloud.Client).Server.Reboot(context.Background(), server)
+		// enable rescue request
+		rescue, _, err := m.(*hcloud.Client).Server.EnableRescue(context.Background(), server, hcloud.ServerEnableRescueOpts{
+			Type:    rt,
+			SSHKeys: ssh,
+		})
 		if err != nil {
 			return err
 		}
 
 		// wait for action and check for error
-		_, errch := m.(*hcloud.Client).Action.WatchProgress(context.Background(), act)
+		_, errch := m.(*hcloud.Client).Action.WatchProgress(context.Background(), rescue.Action)
 		err = <-errch
 		if err != nil {
 			return err
 		}
 
-	} else if d.Get("reset_on_activation").(bool) {		// reset if reboot is false and reset is true
-		act, _, err := m.(*hcloud.Client).Server.Reset(context.Background(), server)
+		// save root password
+		d.Set("password", rescue.RootPassword)
+
+		if d.Get("reboot_on_activation").(bool) { // soft reboot instead of reset, if reboot is set to true
+			act, _, err := m.(*hcloud.Client).Server.Reboot(context.Background(), server)
+			if err != nil {
+				return err
+			}
+
+			// wait for action and check for error
+			_, errch := m.(*hcloud.Client).Action.WatchProgress(context.Background(), act)
+			err = <-errch
+			if err != nil {
+				return err
+			}
+
+		} else if d.Get("reset_on_activation").(bool) { // reset if reboot is false and reset is true
+			act, _, err := m.(*hcloud.Client).Server.Reset(context.Background(), server)
+			if err != nil {
+				return err
+			}
+
+			// wait for action and check for error
+			_, errch := m.(*hcloud.Client).Action.WatchProgress(context.Background(), act)
+			err = <-errch
+			if err != nil {
+				return err
+			}
+		}
+
+		id, err := uuid.NewV4()
 		if err != nil {
 			return err
 		}
-
-		// wait for action and check for error
-		_, errch := m.(*hcloud.Client).Action.WatchProgress(context.Background(), act)
-		err = <-errch
-		if err != nil {
-			return err
-		}
+		d.SetId(id.String())
+	} else {
+		return errors.New("Server does not exist")
 	}
-
-	id, err := uuid.NewV4()
-	if err != nil {
-		return err
-	}
-	d.SetId(id.String())
 
 	return nil
 }
@@ -174,47 +184,49 @@ func resourceHcloudRescueDelete(d *schema.ResourceData, m interface{}) error {
 		return err
 	}
 
-	// disable rescue if enabled
-	if server.RescueEnabled {
-		// disable rescue request
-		act, _, err := m.(*hcloud.Client).Server.DisableRescue(context.Background(), server)
-		if err != nil {
-			return err
+	if server != nil {
+		// disable rescue if enabled
+		if server.RescueEnabled {
+			// disable rescue request
+			act, _, err := m.(*hcloud.Client).Server.DisableRescue(context.Background(), server)
+			if err != nil {
+				return err
+			}
+
+			// wait for action and check for error
+			_, errch := m.(*hcloud.Client).Action.WatchProgress(context.Background(), act)
+			err = <-errch
+			if err != nil {
+				return err
+			}
 		}
 
-		// wait for action and check for error
-		_, errch := m.(*hcloud.Client).Action.WatchProgress(context.Background(), act)
-		err = <-errch
-		if err != nil {
-			return err
-		}
-	}
+		// check for reboot or reset
+		if d.Get("reboot_on_deactivation").(bool) { // soft reboot instead of reset, if reboot is set to true
+			act, _, err := m.(*hcloud.Client).Server.Reboot(context.Background(), server)
+			if err != nil {
+				return err
+			}
 
-	// check for reboot or reset
-	if d.Get("reboot_on_deactivation").(bool) {	// soft reboot instead of reset, if reboot is set to true
-		act, _, err := m.(*hcloud.Client).Server.Reboot(context.Background(), server)
-		if err != nil {
-			return err
-		}
+			// wait for action and check for error
+			_, errch := m.(*hcloud.Client).Action.WatchProgress(context.Background(), act)
+			err = <-errch
+			if err != nil {
+				return err
+			}
 
-		// wait for action and check for error
-		_, errch := m.(*hcloud.Client).Action.WatchProgress(context.Background(), act)
-		err = <-errch
-		if err != nil {
-			return err
-		}
+		} else if d.Get("reset_on_deactivation").(bool) { // reset if reboot is false and reset is true
+			act, _, err := m.(*hcloud.Client).Server.Reset(context.Background(), server)
+			if err != nil {
+				return err
+			}
 
-	} else if d.Get("reset_on_deactivation").(bool) {		// reset if reboot is false and reset is true
-		act, _, err := m.(*hcloud.Client).Server.Reset(context.Background(), server)
-		if err != nil {
-			return err
-		}
-
-		// wait for action and check for error
-		_, errch := m.(*hcloud.Client).Action.WatchProgress(context.Background(), act)
-		err = <-errch
-		if err != nil {
-			return err
+			// wait for action and check for error
+			_, errch := m.(*hcloud.Client).Action.WatchProgress(context.Background(), act)
+			err = <-errch
+			if err != nil {
+				return err
+			}
 		}
 	}
 

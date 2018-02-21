@@ -6,6 +6,7 @@ import (
 	"context"
 	"strconv"
 	"time"
+	"errors"
 )
 
 func resourceHcloudServer() *schema.Resource {
@@ -132,11 +133,17 @@ func resourceHcloudServerCreate(d *schema.ResourceData, m interface{}) error {
 	if err != nil {
 		return err
 	}
+	if st == nil {
+		return errors.New("Server Type not found")
+	}
 
 	// get image object
 	img, _, err := m.(*hcloud.Client).Image.GetByID(context.Background(), d.Get("image").(int))
 	if err != nil {
 		return err
+	}
+	if img == nil {
+		return errors.New("Image not found")
 	}
 
 	// check if location is set and get location object
@@ -145,6 +152,9 @@ func resourceHcloudServerCreate(d *schema.ResourceData, m interface{}) error {
 		loc, _, err = m.(*hcloud.Client).Location.GetByID(context.Background(), lid.(int))
 		if err != nil {
 			return err
+		}
+		if loc == nil {
+			return errors.New("Location not found")
 		}
 	}
 
@@ -155,15 +165,23 @@ func resourceHcloudServerCreate(d *schema.ResourceData, m interface{}) error {
 		if err != nil {
 			return err
 		}
+		if dc == nil {
+			return errors.New("Datacenter not found")
+		}
 	}
 
 	// transform ssh key ids into array of SSHKey objects
 	ids := d.Get("ssh_keys").([]interface{})
 	ssh := make([]*hcloud.SSHKey, len(ids))
 	for i, v := range ids {
-		ssh[i] = &hcloud.SSHKey{
-			ID: v.(int),
+		key, _ , err := m.(*hcloud.Client).SSHKey.GetByID(context.Background(), v.(int))
+		if err != nil {
+			return err
 		}
+		if key == nil {
+			return errors.New("SSH Key " + strconv.Itoa(v.(int)) + " not found")
+		}
+		ssh[i] = key
 	}
 
 	// create server
@@ -244,25 +262,29 @@ func resourceHcloudServerRead(d *schema.ResourceData, m interface{}) error {
 		return err
 	}
 
-	// update resource data
-	d.Set("name", server.Name)
-	d.Set("server_type", server.ServerType.ID)
-	d.Set("datacenter", server.Datacenter.ID)
-	d.Set("location", server.Datacenter.Location.ID)
-	d.Set("image", server.Image.ID)
-	d.Set("status", server.Status)
-	d.Set("created", server.Created.String())
-	d.Set("ipv4", server.PublicNet.IPv4.IP.String())
-	d.Set("ipv4_ptr", server.PublicNet.IPv4.DNSPtr)
-	d.Set("ipv6", server.PublicNet.IPv6.IP.String())
-	d.Set("ipv6_ptr", server.PublicNet.IPv6.DNSPtr)
-	d.Set("backup_window", server.BackupWindow)
+	if server != nil {
+		// update resource data
+		d.Set("name", server.Name)
+		d.Set("server_type", server.ServerType.ID)
+		d.Set("datacenter", server.Datacenter.ID)
+		d.Set("location", server.Datacenter.Location.ID)
+		d.Set("image", server.Image.ID)
+		d.Set("status", server.Status)
+		d.Set("created", server.Created.String())
+		d.Set("ipv4", server.PublicNet.IPv4.IP.String())
+		d.Set("ipv4_ptr", server.PublicNet.IPv4.DNSPtr)
+		d.Set("ipv6", server.PublicNet.IPv6.IP.String())
+		d.Set("ipv6_ptr", server.PublicNet.IPv6.DNSPtr)
+		d.Set("backup_window", server.BackupWindow)
 
-	// check if backup is enabled or disabled
-	if len(server.BackupWindow) > 0 {
-		d.Set("backup", true)
+		// check if backup is enabled or disabled
+		if len(server.BackupWindow) > 0 {
+			d.Set("backup", true)
+		} else {
+			d.Set("backup", false)
+		}
 	} else {
-		d.Set("backup", false)
+		d.SetId("")
 	}
 
 	return nil
@@ -281,45 +303,134 @@ func resourceHcloudServerUpdate(d *schema.ResourceData, m interface{}) error {
 		return err
 	}
 
-	// update server name, when necessary
-	if server.Name != d.Get("name").(string) {
-		server, _, err = m.(*hcloud.Client).Server.Update(context.Background(), server, hcloud.ServerUpdateOpts{
-			Name: d.Get("name").(string),
-		})
-		if err != nil {
-			return err
-		}
-	}
-
-	// update IPv4 DNS PTR, when necessary
-	if server.PublicNet.IPv4.DNSPtr != d.Get("ipv4_ptr").(string) {
-		ptr := d.Get("ipv4_ptr").(string)
-
-		// send dns ptr change request
-		act, _, err := m.(*hcloud.Client).Server.ChangeDNSPtr(context.Background(), server, server.PublicNet.IPv4.IP.String(), &ptr)
-		if err != nil {
-			return err
+	if server != nil {
+		// update server name, when necessary
+		if server.Name != d.Get("name").(string) {
+			server, _, err = m.(*hcloud.Client).Server.Update(context.Background(), server, hcloud.ServerUpdateOpts{
+				Name: d.Get("name").(string),
+			})
+			if err != nil {
+				return err
+			}
 		}
 
-		// wait for action to finish and check for errors
-		_, errch := m.(*hcloud.Client).Action.WatchProgress(context.Background(), act)
-		err = <-errch
-		if err != nil {
-			return err
+		// update IPv4 DNS PTR, when necessary
+		if server.PublicNet.IPv4.DNSPtr != d.Get("ipv4_ptr").(string) {
+			ptr := d.Get("ipv4_ptr").(string)
+
+			// send dns ptr change request
+			act, _, err := m.(*hcloud.Client).Server.ChangeDNSPtr(context.Background(), server, server.PublicNet.IPv4.IP.String(), &ptr)
+			if err != nil {
+				return err
+			}
+
+			// wait for action to finish and check for errors
+			_, errch := m.(*hcloud.Client).Action.WatchProgress(context.Background(), act)
+			err = <-errch
+			if err != nil {
+				return err
+			}
 		}
-	}
 
-	// upgrade server type, if necessary
-	if server.ServerType.ID != d.Get("server_type").(int) {
-		restart := false
+		// upgrade server type, if necessary
+		if server.ServerType.ID != d.Get("server_type").(int) {
+			restart := false
 
-		// check if server is running
-		if server.Status != "off" {
-			// restart server afterwards
-			restart = true
+			// check if server is running
+			if server.Status != "off" {
+				// restart server afterwards
+				restart = true
 
-			// try acpi shutdown
-			act, _, err := m.(*hcloud.Client).Server.Shutdown(context.Background(), server)
+				// try acpi shutdown
+				act, _, err := m.(*hcloud.Client).Server.Shutdown(context.Background(), server)
+				if err != nil {
+					return err
+				}
+
+				// wait for action to finish and check for errors
+				_, errch := m.(*hcloud.Client).Action.WatchProgress(context.Background(), act)
+				err = <-errch
+				if err != nil {
+					return err
+				}
+
+				// try for 5 minutes if server is powered off
+				for i := 0; i < 10; i++ {
+					time.Sleep(30 * time.Second)
+
+					server, _, err := m.(*hcloud.Client).Server.GetByID(context.Background(), id)
+					if err != nil {
+						return err
+					}
+
+					// Check that server still exists
+					if server == nil {
+						d.SetId("");
+						return nil
+					}
+
+					// Check server status
+					if server.Status == "off" {
+						break
+					}
+				}
+			}
+
+			// check if server is still running
+			if server.Status != "off" {
+				// power off
+				act, _, err := m.(*hcloud.Client).Server.Poweroff(context.Background(), server)
+				if err != nil {
+					return err
+				}
+
+				// wait for action to finish and check for errors
+				_, errch := m.(*hcloud.Client).Action.WatchProgress(context.Background(), act)
+				err = <-errch
+				if err != nil {
+					return err
+				}
+			}
+
+			// send server change type request
+			act, _, err := m.(*hcloud.Client).Server.ChangeType(context.Background(), server, hcloud.ServerChangeTypeOpts{
+				ServerType: &hcloud.ServerType{
+					ID: d.Get("server_type").(int),
+				},
+				UpgradeDisk: d.Get("upgrade_disk").(bool),
+			})
+			if err != nil {
+				return nil
+			}
+
+			// wait for action to finish and check for errors
+			_, errch := m.(*hcloud.Client).Action.WatchProgress(context.Background(), act)
+			err = <-errch
+			if err != nil {
+				return err
+			}
+
+			// start server, if it was running beforehand
+			if restart {
+				// power on request
+				act, _, err := m.(*hcloud.Client).Server.Poweron(context.Background(), server)
+				if err != nil {
+					return err
+				}
+
+				// wait for action to finish and check for errors
+				_, errch := m.(*hcloud.Client).Action.WatchProgress(context.Background(), act)
+				err = <-errch
+				if err != nil {
+					return err
+				}
+			}
+		}
+
+		// enable backup and/or update backup window, if necessary
+		if d.Get("backup").(bool) && (d.Get("backup_window").(string) != server.BackupWindow || len(server.BackupWindow) < 1) {
+			// send enable backup action
+			act, _, err := m.(*hcloud.Client).Server.EnableBackup(context.Background(), server, d.Get("backup_window").(string))
 			if err != nil {
 				return err
 			}
@@ -331,25 +442,27 @@ func resourceHcloudServerUpdate(d *schema.ResourceData, m interface{}) error {
 				return err
 			}
 
-			// try for 5 minutes if server is powered off
-			for i := 0; i < 10; i++ {
-				time.Sleep(30 * time.Second)
-
+			// get randomly assigned backup window, if none was set
+			if len(d.Get("backup_window").(string)) < 1 {
 				server, _, err := m.(*hcloud.Client).Server.GetByID(context.Background(), id)
 				if err != nil {
 					return err
 				}
 
-				if server.Status == "off" {
-					break
+				// Check that server still exists
+				if server == nil {
+					d.SetId("")
+					return nil
 				}
+
+				d.Set("backup_windows", server.BackupWindow)
 			}
 		}
 
-		// check if server is still running
-		if server.Status != "off" {
-			// power off
-			act, _, err := m.(*hcloud.Client).Server.Poweroff(context.Background(), server)
+		// disable backup, if neccessary
+		if !d.Get("backup").(bool) {
+			// send disable backup action
+			act, _, err := m.(*hcloud.Client).Server.DisableBackup(context.Background(), server)
 			if err != nil {
 				return err
 			}
@@ -361,82 +474,8 @@ func resourceHcloudServerUpdate(d *schema.ResourceData, m interface{}) error {
 				return err
 			}
 		}
-
-		// send server change type request
-		act, _, err := m.(*hcloud.Client).Server.ChangeType(context.Background(), server, hcloud.ServerChangeTypeOpts{
-			ServerType: &hcloud.ServerType{
-				ID: d.Get("server_type").(int),
-			},
-			UpgradeDisk: d.Get("upgrade_disk").(bool),
-		})
-		if err != nil {
-			return nil
-		}
-
-		// wait for action to finish and check for errors
-		_, errch := m.(*hcloud.Client).Action.WatchProgress(context.Background(), act)
-		err = <-errch
-		if err != nil {
-			return err
-		}
-
-		// start server, if it was running beforehand
-		if restart {
-			// power on request
-			act, _, err := m.(*hcloud.Client).Server.Poweron(context.Background(), server)
-			if err != nil {
-				return err
-			}
-
-			// wait for action to finish and check for errors
-			_, errch := m.(*hcloud.Client).Action.WatchProgress(context.Background(), act)
-			err = <-errch
-			if err != nil {
-				return err
-			}
-		}
-	}
-
-	// enable backup and/or update backup window, if necessary
-	if d.Get("backup").(bool) && (d.Get("backup_window").(string) != server.BackupWindow || len(server.BackupWindow) < 1) {
-		// send enable backup action
-		act, _, err := m.(*hcloud.Client).Server.EnableBackup(context.Background(), server, d.Get("backup_window").(string))
-		if err != nil {
-			return err
-		}
-
-		// wait for action to finish and check for errors
-		_, errch := m.(*hcloud.Client).Action.WatchProgress(context.Background(), act)
-		err = <-errch
-		if err != nil {
-			return err
-		}
-
-		// get randomly assigned backup window, if none was set
-		if len(d.Get("backup_window").(string)) < 1 {
-			server, _, err := m.(*hcloud.Client).Server.GetByID(context.Background(), id)
-			if err != nil {
-				return err
-			}
-
-			d.Set("backup_windows", server.BackupWindow)
-		}
-	}
-
-	// disable backup, if neccessary
-	if !d.Get("backup").(bool) {
-		// send disable backup action
-		act, _, err := m.(*hcloud.Client).Server.DisableBackup(context.Background(), server)
-		if err != nil {
-			return err
-		}
-
-		// wait for action to finish and check for errors
-		_, errch := m.(*hcloud.Client).Action.WatchProgress(context.Background(), act)
-		err = <-errch
-		if err != nil {
-			return err
-		}
+	} else {
+		d.SetId("")
 	}
 
 	return nil
@@ -453,6 +492,12 @@ func resourceHcloudServerDelete(d *schema.ResourceData, m interface{}) error {
 	server, _, err := m.(*hcloud.Client).Server.GetByID(context.Background(), id)
 	if err != nil {
 		return err
+	}
+
+	// check that server still exists
+	if server == nil {
+		d.SetId("")
+		return nil
 	}
 
 	// send server delete request

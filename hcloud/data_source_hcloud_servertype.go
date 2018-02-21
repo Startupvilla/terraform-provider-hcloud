@@ -44,9 +44,13 @@ func dataSourceHcloudServertypeRead(d *schema.ResourceData, m interface{}) error
 		return err
 	}
 
-	d.SetId(strconv.Itoa(st.ID))
-	d.Set("name", st.Name)
-	d.Set("description", st.Description)
+	if st != nil {
+		d.SetId(strconv.Itoa(st.ID))
+		d.Set("name", st.Name)
+		d.Set("description", st.Description)
+	} else {
+		d.SetId("")
+	}
 
 	return nil
 }

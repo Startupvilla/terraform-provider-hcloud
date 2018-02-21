@@ -62,22 +62,26 @@ func dataSourceHcloudDatacenterRead(d *schema.ResourceData, m interface{}) error
 		return err
 	}
 
-	d.SetId(strconv.Itoa(dc.ID))
-	d.Set("name", dc.Name)
-	d.Set("description", dc.Description)
-	d.Set("location", dc.Location.ID)
+	if dc != nil {
+		d.SetId(strconv.Itoa(dc.ID))
+		d.Set("name", dc.Name)
+		d.Set("description", dc.Description)
+		d.Set("location", dc.Location.ID)
 
-	supp := make([]int, len(dc.ServerTypes.Supported))
-	for i, v := range dc.ServerTypes.Supported {
-		supp[i] = v.ID
-	}
-	d.Set("server_types_supported", supp)
+		supp := make([]int, len(dc.ServerTypes.Supported))
+		for i, v := range dc.ServerTypes.Supported {
+			supp[i] = v.ID
+		}
+		d.Set("server_types_supported", supp)
 
-	avail := make([]int, len(dc.ServerTypes.Available))
-	for i, v := range dc.ServerTypes.Available {
-		avail[i] = v.ID
+		avail := make([]int, len(dc.ServerTypes.Available))
+		for i, v := range dc.ServerTypes.Available {
+			avail[i] = v.ID
+		}
+		d.Set("server_types_supported", avail)
+	} else {
+		d.SetId("")
 	}
-	d.Set("server_types_supported", avail)
 
 	return nil
 }

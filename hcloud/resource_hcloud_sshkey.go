@@ -72,9 +72,13 @@ func resourceHcloudSSHKeyRead(d *schema.ResourceData, m interface{}) error {
 		return err
 	}
 
-	d.Set("name", key.Name)
-	d.Set("public_key", key.PublicKey)
-	d.Set("fingerprint", key.Fingerprint)
+	if key != nil {
+		d.Set("name", key.Name)
+		d.Set("public_key", key.PublicKey)
+		d.Set("fingerprint", key.Fingerprint)
+	} else {
+		d.SetId("")
+	}
 
 	return nil
 }
@@ -90,13 +94,17 @@ func resourceHcloudSSHKeyUpdate(d *schema.ResourceData, m interface{}) error {
 		return err
 	}
 
-	if key.Name != d.Get("name").(string) {
-		key, _, err = m.(*hcloud.Client).SSHKey.Update(context.Background(), key, hcloud.SSHKeyUpdateOpts{
-			Name: d.Get("name").(string),
-		})
-		if err != nil {
-			return err
+	if key != nil {
+		if key.Name != d.Get("name").(string) {
+			key, _, err = m.(*hcloud.Client).SSHKey.Update(context.Background(), key, hcloud.SSHKeyUpdateOpts{
+				Name: d.Get("name").(string),
+			})
+			if err != nil {
+				return err
+			}
 		}
+	} else {
+		d.SetId("")
 	}
 
 	return nil
@@ -112,7 +120,11 @@ func resourceHcloudSSHKeyDelete(d *schema.ResourceData, m interface{}) error {
 	if err != nil {
 		return err
 	}
-	_, err = m.(*hcloud.Client).SSHKey.Delete(context.Background(), key)
 
-	return err
+	if key != nil {
+		_, err = m.(*hcloud.Client).SSHKey.Delete(context.Background(), key)
+		return err
+	}
+
+	return nil
 }

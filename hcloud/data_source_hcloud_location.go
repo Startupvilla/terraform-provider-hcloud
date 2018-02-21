@@ -44,9 +44,13 @@ func dataSourceHcloudLocationRead(d *schema.ResourceData, m interface{}) error {
 		return err
 	}
 
-	d.SetId(strconv.Itoa(loc.ID))
-	d.Set("name", loc.Name)
-	d.Set("description", loc.Description)
+	if loc != nil {
+		d.SetId(strconv.Itoa(loc.ID))
+		d.Set("name", loc.Name)
+		d.Set("description", loc.Description)
+	} else {
+		d.SetId("")
+	}
 
 	return nil
 }

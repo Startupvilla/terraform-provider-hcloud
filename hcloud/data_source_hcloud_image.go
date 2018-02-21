@@ -48,10 +48,14 @@ func dataSourceHcloudImageRead(d *schema.ResourceData, m interface{}) error {
 		return err
 	}
 
-	d.SetId(strconv.Itoa(img.ID))
-	d.Set("name", img.Name)
-	d.Set("description", img.Description)
-	d.Set("status", img.Status)
+	if img != nil {
+		d.SetId(strconv.Itoa(img.ID))
+		d.Set("name", img.Name)
+		d.Set("description", img.Description)
+		d.Set("status", img.Status)
+	} else {
+		d.SetId("")
+	}
 
 	return nil
 }
